@@ -1,0 +1,35 @@
+================================================================================
+                       STUDYVAULT E2E RAG INTEGRATION TEST
+================================================================================
+
+[1/10] Connecting to database...
+Database connected successfully.
+
+[2/10] Starting Express backend server on port 5001...
+Test server is running at http://127.0.0.1:5001
+
+[3/10] Registering a new test user...
+User registered successfully: e2e_user_69259@test.com
+
+[4/10] Logging in user to obtain JWT...
+JWT token retrieved successfully.
+
+[5/10] Creating and uploading mock 2-page PDF note...
+Note uploaded and RAG Qdrant indexing completed. Note ID: 6a8318f2db5122b5e8678e41
+
+[6/10] Sending first chat query about database anomalies...
+AI Answer: "According to page 1, StudyVault normalisation is page 1 content. Database normalisation prevents anomalies."
+Sources retrieved: [{"noteId":"6a8318f2db5122b5e8678e41","chunkIndex":0,"pageNumber":1,"score":0.95},{"noteId":"6a8318f2db5122b5e8678e41","chunkIndex":1,"pageNumber":2,"score":0.95}]
+
+SUCCESS: Page-level source attribution verified (Page 1 detected in sources).
+
+[7/10] Sending follow-up query to test conversation memory...
+AI Answer: "According to page 1, StudyVault normalisation is page 1 content. Database normalisation prevents anomalies."
+
+[8/10] Retrieving conversation history for this note...
+Found conversation with ID: 6a8318f2db5122b5e8678e42
+
+[9/10] Deleting conversation history...
+Conversation history deleted successfully.
+
+[10/10] E2E Pipeline Verification Status: PASSED

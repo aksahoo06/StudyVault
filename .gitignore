@@ -1,0 +1,33 @@
+# Environment variables
+.env
+*.env
+
+# Dependencies
+node_modules/
+jspm_packages/
+web_modules/
+
+# Python virtual environment and cache
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.gemini/
+.agents/
+
+# Local databases and uploads
+backend/data/
+backend/uploads/
+data/
+uploads/
+
+# Production builds
+frontend/dist/
+dist/

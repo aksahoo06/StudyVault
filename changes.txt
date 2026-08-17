@@ -1,0 +1,54 @@
+1.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Downloaded and cached the Hugging Face model "all-MiniLM-L6-v2" locally.
+     - Started the Uvicorn server successfully on port 8001 (using "uvicorn embedding_Server:app --reload --port 8001").
+     - Removed the duplicate recursive import of "ingestPdf" in "backend/services/ai/ingestion_service.js".
+     - Updated the path of "pdfExtractor" in "backend/services/ai/ingestion_service.js" from "../../utils/pdfExtractor" to "../../src/utils/pdfExtractor".
+     - Updated the chunking import in "backend/services/ai/ingestion_service.js" from "./chunking_service" to "./chunkingServices".
+     - Updated the test PDF file path in "backend/services/ai/test_ingestion.js" to point to "1780821915953-normalisation.pdf".
+   Why:
+     - The Uvicorn server failed due to a temporary network DNS resolution error ("getaddrinfo failed") when trying to fetch the model from Hugging Face.
+     - The double declaration of "ingestPdf" caused a Javascript SyntaxError.
+     - The file paths for pdfExtractor and chunkingServices were incorrect, causing "Module not found" errors.
+     - The file "6230.pdf" did not exist in the backend/uploads directory, leading to a file not found (ENOENT) error when running the ingestion test.
+
+2.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Created a root-level ".gitignore" file containing ".env".
+   Why:
+     - To ensure that sensitive credentials (like MongoDB URI, API keys, JWT secrets) and local environment/dependency files are ignored by git and not committed.
+
+3.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Fixed Qdrant configuration import path in "backend/services/ai/qdrant_service.js" from "../../config/qdrant" to "../../src/config/qdrant".
+   Why:
+     - The configuration file was located under the "src" directory (at "backend/src/config/qdrant.js"), causing a "Module not found" error when running "test_qdrant.js".
+
+4.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Added support for remote HTTP/HTTPS URLs (including Cloudinary PDF URLs) in "backend/src/utils/pdfExtractor.js".
+   Why:
+     - The "pdfExtractor" originally only read files from the local filesystem via "fs.readFileSync". To process PDFs stored in Cloudinary, the function now dynamically fetches remote PDFs over HTTP and loads them into a memory buffer before parsing.
+
+5.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Updated the point ID generation in "backend/services/ai/qdrant_service.js" ("storeChunks") to use "crypto.randomUUID()" instead of sequential indexes based on "metadata.startId".
+   Why:
+     - To ensure that every vector chunk stored in Qdrant has a globally unique ID (UUID), preventing point collision issues when multiple documents are ingested.
+
+6.
+   Date/Time: 2026-08-13
+   Changes Made:
+     - Replaced local storage of uploaded PDFs with a fully memory-buffered Cloudinary storage.
+     - Changed Multer storage in "backend/src/middleware/uploadMiddleware.js" to "multer.memoryStorage()".
+     - Updated "uploadNote" in "backend/src/controllers/noteController.js" to upload the memory buffer to Cloudinary, run text extraction on the returned "secure_url", and store the Cloudinary public ID and URL in MongoDB.
+     - Added robust failure cleanup in "uploadNote" to delete the uploaded Cloudinary PDF if subsequent MongoDB insertion or text extraction steps fail.
+     - Removed the static route serving the local "uploads" directory in "backend/src/app.js".
+     - Installed and added "multer" explicitly to "dependencies" in "backend/package.json" to ensure successful installation on production.
+     - Deleted the "backend/uploads" directory.
+     - To eliminate dependencies on local disk storage, make the app fully cloud-compatible, prevent server file storage leaks, and ensure the app is ready for cloud deployment (e.g., to platforms with ephemeral filesystems like Heroku or Render).

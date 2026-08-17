@@ -1,0 +1,200 @@
+================================================================================
+               STUDYVAULT IN-DEPTH FILE-TO-FILE UPLOAD PIPELINE
+================================================================================
+
+This document details the exact sequence of execution during a PDF upload, 
+illustrating how control and data move from one file to another, including 
+specific function scopes and directory locations.
+
+--------------------------------------------------------------------------------
+1. SEQUENTIAL FILE-TO-FILE PATHWAY
+--------------------------------------------------------------------------------
+
+The diagram below shows the flow of execution from the client's HTTP request
+to final database storage and text parsing:
+
+[Client request]
+      |
+      v
+  [1] server.js  (Starts server & imports app.js)
+      |
+      v
+  [2] app.js  (Sets up global middleware and registers routes)
+      |
+      v
+  [3] routes/note.js  (Defines POST /upload & applies middleware)
+      |
+      +---> [4] middleware/authMiddleware.js [protect()] -> Checks user JWT
+      |
+      +---> [5] middleware/uploadMiddleware.js [upload.single()] -> In-memory Multer parsing
+      |
+      v
+  [6] controllers/noteController.js [uploadNote()] (Main transaction orchestrator)
+      |
+      +---> [7] utils/cloudinaryUpload.js [uploadPdfToCloudinary()] -> Uploads Buffer to Cloudinary
+      |     |
+      |     +---> config/cloudinary.js (Initializes Cloudinary SDK credential object)
+      |
+      +---> [8] utils/pdfExtractor.js [extractTextFromPDF()] -> Downloads URL & parses text
+      |     |
+      |     +---> pdf-parse (npm dependency parses downloaded buffer to string)
+      |
+      +---> [9] models/note.js [Note.create()] -> Writes metadata and text to MongoDB
+      |
+      +---> [10] services/ai/ingestion_service.js [ingestAndStoreText()] -> Chunks & embeds text
+      |     |
+      |     +---> services/ai/chunkingServices.js [chunkText()] -> Segments text into smaller chunks
+      |     +---> services/ai/embedding_service.js [generateEmbedding()] -> Generates vectors via Python server
+      |     +---> services/ai/qdrant_service.js [storeChunks()] -> Stores vectors in Qdrant (auto-creates collection)
+      |
+      |   (FALLBACK ON FAILURE)
+      +---> [11] utils/cloudinaryDelete.js [deletePdfFromCloudinary()] -> Destroys uploaded cloud file
+
+--------------------------------------------------------------------------------
+2. DETAILED FILE AND FUNCTION BREAKDOWN
+--------------------------------------------------------------------------------
+
+[1] ENTRY POINT: backend/src/server.js
+    - Purpose: Binds the application to the network port and starts listening.
+    - Path of execution: Imports the Express application from `app.js` and calls `app.listen()`.
+
+[2] ROUTE REGISTRATION: backend/src/app.js
+    - Purpose: Aggregates routers and registers top-level endpoints.
+    - Path of execution: Mounts the note router under `/api/notes`:
+      `app.use("/api/notes", noteRoutes);`
+
+[3] ROUTE DEFINITION: backend/src/routes/note.js
+    - Purpose: Maps the HTTP POST request to the corresponding controllers and middleware.
+    - Function: Triggers the route handler for `POST /upload`.
+    - Path of execution: Applies two middlewares in sequence (`protect` then `upload.single("pdf")`), then passes execution to `uploadNote`.
+
+[4] USER AUTHENTICATION: backend/src/middleware/authMiddleware.js
+    - Purpose: Validates the authorization header containing the user's JWT.
+    - Function: `protect(req, res, next)`
+    - Path of execution: Extracts token, verifies it against the database, sets `req.user`, and calls `next()`.
+
+[5] MULTIPART DATA PARSING: backend/src/middleware/uploadMiddleware.js
+    - Purpose: Intercepts and parses the incoming multi-part file upload stream.
+    - Function: `upload.single("pdf")`
+    - Path of execution: Reads the file stream into RAM, creates a file metadata object containing the raw file payload, binds it to `req.file` (as `req.file.buffer`), and calls `next()`.
+
+[6] TRANSACTION COORDINATOR: backend/src/controllers/noteController.js
+    - Purpose: Oversees the logic of processing the upload request, orchestrating Cloudinary storage, PDF parsing, database storage, and error recovery.
+    - Function: `uploadNote(req, res)`
+    - Path of execution:
+      1. Receives `req.file` from Multer and `req.body.title` from the client.
+      2. Invokes `uploadPdfToCloudinary(req.file.buffer)` from `utils/cloudinaryUpload.js`.
+      3. Invokes `extractTextFromPDF(uploadResult.secure_url)` from `utils/pdfExtractor.js`.
+      4. Invokes `Note.create()` to save the note document in MongoDB.
+      5. Sends a `201 Created` status response with the saved note record to the client.
+      6. (In Catch block): If steps 3 or 4 throw an error, invokes `deletePdfFromCloudinary(uploadResult.public_id)` from `utils/cloudinaryDelete.js` to ensure the uploaded file is destroyed on Cloudinary.
+
+[7] CLOUD UPLOADER: backend/src/utils/cloudinaryUpload.js
+    - Purpose: Uploads local file paths or raw memory Buffers to Cloudinary.
+    - Function: `uploadPdfToCloudinary(fileInput)`
+    - Path of execution:
+      - Checks if the input is a Buffer using `Buffer.isBuffer(fileInput)`.
+      - If it is a Buffer, uses `cloudinary.uploader.upload_stream` to send the payload to Cloudinary.
+      - Resolves the promise with the uploaded image's JSON properties (including `secure_url` and `public_id`).
+
+[8] CLOUD DOCUMENT PARSER: backend/src/utils/pdfExtractor.js
+    - Purpose: Fetches documents and extracts their plaintext.
+    - Function: `extractTextFromPDF(filePath)`
+    - Path of execution:
+      - Detects if `filePath` starts with `http://` or `https://`.
+      - Uses `fetch(filePath)` to stream the remote file down.
+      - Converts the payload using `response.arrayBuffer()` and `Buffer.from()`.
+      - Feeds the resulting Buffer to the `pdf-parse` library to extract raw text, returning it to the controller.
+
+[9] DATABASE MODEL: backend/src/models/note.js
+    - Purpose: Schema definition for note documents stored in MongoDB.
+    - Function: Schema instantiation.
+    - Path of execution: Creates a schema containing fields for `title`, `pdfUrl`, `cloudinaryPublicId`, `extractedText`, and `uploadedBy`.
+
+[10] RAG TEXT INGESTOR: backend/services/ai/ingestion_service.js
+     - Purpose: Chunks extracted text, embeds them via local/remote python server, and stores them in Qdrant DB.
+     - Function: `ingestAndStoreText({ noteId, userId, text })`
+     - Path of execution:
+       1. Calls `chunkText()` to segment the text.
+       2. Loops through chunks calling `generateEmbedding()` to get 384-dimensional vectors.
+       3. Invokes `storeChunks()` from `qdrant_service.js` which upserts to Qdrant (auto-creates collection if missing).
+
+[11] CLOUD CLEANER: backend/src/utils/cloudinaryDelete.js
+     - Purpose: Removes resources from Cloudinary.
+     - Function: `deletePdfFromCloudinary(publicId, resourceType)`
+     - Path of execution: Calls `cloudinary.uploader.destroy(publicId, { resource_type })` to remove the file from remote storage, returning the confirmation result.
+
+--------------------------------------------------------------------------------
+3. DETAILED CODE SYNTAX REFERENCE
+--------------------------------------------------------------------------------
+
+See the files directly for complete imports, but here are the key function configurations:
+
+* backend/src/middleware/uploadMiddleware.js:
+  ```javascript
+  const multer = require("multer");
+  const storage = multer.memoryStorage(); // Holds files strictly in RAM
+  const upload = multer({ storage });
+  module.exports = upload;
+  ```
+
+* backend/src/utils/cloudinaryUpload.js:
+  ```javascript
+  if (Buffer.isBuffer(fileInput)) {
+      return new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+              { resource_type: "auto", folder: "studyvault/notes" },
+              (error, result) => {
+                  if (error) reject(error);
+                  else resolve(result); // result.secure_url, result.public_id
+              }
+          );
+          uploadStream.end(fileInput); // Pipes the file buffer into Cloudinary
+      });
+  }
+  ```
+
+* backend/src/utils/pdfExtractor.js:
+  ```javascript
+  if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+      const response = await fetch(filePath);
+      const arrayBuffer = await response.arrayBuffer();
+      dataBuffer = Buffer.from(arrayBuffer); // Load downloaded PDF into Buffer
+  } else {
+      dataBuffer = fs.readFileSync(filePath); // Fallback for local files
+  }
+  const data = await pdfParse(dataBuffer);
+  return data.text;
+  ```
+
+* backend/src/controllers/noteController.js:
+  ```javascript
+  try {
+      uploadResult = await uploadPdfToCloudinary(req.file.buffer);
+      const extractedText = await extractTextFromPDF(uploadResult.secure_url);
+      const note = await Note.create({
+          title,
+          pdfUrl: uploadResult.secure_url,
+          cloudinaryPublicId: uploadResult.public_id,
+          extractedText,
+          uploadedBy: req.user._id
+      });
+      // Index note chunks in Qdrant for RAG
+      try {
+          await ingestAndStoreText({
+              noteId: note._id,
+              userId: req.user._id,
+              text: extractedText
+          });
+      } catch (ragError) {
+          console.error("Warning: Failed to index note chunks in Qdrant:", ragError.message);
+      }
+      return res.status(201).json({ message: "PDF uploaded successfully", note });
+  } catch (error) {
+      if (uploadResult && uploadResult.public_id) {
+          const resourceType = uploadResult.secure_url.includes("/raw/") ? "raw" : "image";
+          await deletePdfFromCloudinary(uploadResult.public_id, resourceType);
+      }
+      return res.status(500).json({ message: error.message });
+  }
+  ```
