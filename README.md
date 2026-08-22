@@ -1,6 +1,6 @@
 # StudyVault — AI-Powered Learning Platform
 
-StudyVault is a full-stack, AI-powered learning platform that allows students to upload PDF study materials and transform them into interactive learning resources. Built on a robust MERN (MongoDB, Express, React, Node) architecture, it implements a custom **Retrieval-Augmented Generation (RAG)** pipeline, local embedding generation, and persistent vector search to deliver contextual learning tools.
+StudyVault is a full-stack, AI-powered learning platform that allows students to upload PDF study materials and transform them into interactive learning resources. Built on a robust MERN (MongoDB, Express, React, Node) architecture, it implements a custom **Retrieval-Augmented Generation (RAG)** pipeline, native embedding generation, and persistent vector search to deliver contextual learning tools.
 
 ---
 
@@ -9,12 +9,12 @@ StudyVault is a full-stack, AI-powered learning platform that allows students to
 - **Frontend:** React (Vite, TailwindCSS v4, React Router v7)
 - **Backend:** Node.js + Express.js
 - **Primary Database:** MongoDB Atlas + Mongoose (for user authentication, PDF metadata, flashcards, quizzes, and persistent chat history)
-- **Vector Database:** [Qdrant](https://qdrant.tech/) (storing vector embeddings, chunk text, page references, and performing metadata-filtered similarity searches)
+- **Vector Database:** [Qdrant](https://qdrant.tech/) (storing vector embeddings, chunk text, page references, and performing similarity searches)
 - **Authentication:** JSON Web Tokens (JWT) + password hashing via `bcryptjs`
 - **PDF Management:** `multer` (configured for in-memory uploads)
 - **PDF Storage:** Cloudinary (for persistent remote document hosting)
 - **Large Language Model (LLM):** Google Gemini API (`gemini-2.5-flash` model using `@google/generative-ai`)
-- **Embedding Model:** Local/remote Hugging Face `all-MiniLM-L6-v2` model hosted via a Python FastAPI server
+- **Embedding Model:** Google Gemini API `text-embedding-004` (called directly from the Node.js backend using the `@google/generative-ai` SDK, set to output 384 dimensions to optimize storage and query speed)
 - **RAG Pipeline:** Custom manual implementation (built from scratch, bypassing frameworks like LangChain or LlamaIndex to ensure full control over data chunking, embeddings, storage, retrieval, and prompt injection defense)
 
 ---
@@ -44,8 +44,8 @@ When a user uploads a study material (PDF), the data flows as follows:
                                       │  (5. Segment text page-by-page)
                                       │  (6. Chunk text page-by-page: 500-word limit, 50-word overlap)
                                       ▼
-                             [FastAPI Python Server]
-                                      │  (7. Generate 384-dimension vector embeddings using all-MiniLM-L6-v2)
+                             [Gemini API (Embedding Model)]
+                                      │  (7. Generate 384-dimension vector embeddings using text-embedding-004)
                                       ▼
                                  [Qdrant DB]
                                          (8. Upsert chunks, vectors, and metadata:
@@ -58,26 +58,26 @@ When a user asks a question about their PDF, the system executes a grounded, con
 
 ```
                   [User submits query in chat]
-                              │
-                              ▼
-            [FastAPI Python Embedding Server]
-                              │  (Generates query vector embedding)
-                              ▼
-                         [Qdrant DB]
-                              │  (Performs similarity search with Cosine distance)
-                              │  (Applies strict filters: userId = X AND noteId = Y)
-                              ▼
-              [Top-K (limit=5) Relevant Chunks]
-                              │
-                              ▼
-                 [Prompt Construction Service]
-                              │  (Isolates context using XML tags to prevent injections)
-                              │  (Appends last 10 messages of conversation history)
-                              ▼
-                  [Google Gemini API]
-                              │  (Formulates answer based strictly on document context)
-                              ▼
-                 [Grounded Response + Sources]
+                               │
+                               ▼
+                 [Gemini API (Embedding Model)]
+                               │  (Generates query vector embedding)
+                               ▼
+                          [Qdrant DB]
+                               │  (Performs similarity search with Cosine distance)
+                               │  (Applies strict filters: userId = X AND noteId = Y)
+                               ▼
+               [Top-K (limit=5) Relevant Chunks]
+                               │
+                               ▼
+                  [Prompt Construction Service]
+                               │  (Isolates context using XML tags to prevent injections)
+                               │  (Appends last 10 messages of conversation history)
+                               ▼
+                   [Google Gemini API]
+                               │  (Formulates answer based strictly on document context)
+                               ▼
+                  [Grounded Response + Sources]
                                  - Answer citing page citations
                                  - Sources: Note ID, chunk index, page number, similarity score
 ```
@@ -137,9 +137,6 @@ StudyVault/
 │   ├── index.html
 │   ├── tailwind.config.js
 │   └── package.json
-├── python/
-│   ├── embedding_Server.py     # FastAPI application running sentence-transformers
-│   └── embedding.py             # CLI test tool for embeddings
 └── package.json                 # Project root package configuration
 ```
 
@@ -149,29 +146,15 @@ StudyVault/
 
 ### Prerequisites
 - Node.js (v18+)
-- Python (3.9+)
 - MongoDB Atlas account (or local MongoDB database)
 - Qdrant Cloud account (or local Qdrant instance)
 - Cloudinary developer account
 - Google Gemini API Key
 
-### 1. Run Python Embedding Server
-Navigate to the `python/` directory, set up a virtual environment, install dependencies, and start the FastAPI server:
-```bash
-cd python
-python -m venv venv
-venv\Scripts\activate      # On Windows
-# source venv/bin/activate  # On macOS/Linux
-
-pip install fastapi uvicorn sentence-transformers
-uvicorn embedding_Server:app --host 127.0.0.1 --port 8001 --reload
-```
-The embedding server runs at `http://127.0.0.1:8001`.
-
-### 2. Configure Backend Environment
+### 1. Configure Backend Environment
 Navigate to the `backend/` directory, install packages, and create a `.env` file:
 ```bash
-cd ../backend
+cd backend
 npm install
 ```
 Add the following keys to your `backend/.env` file:
@@ -185,14 +168,13 @@ CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 GEMINI_API_KEY=your_gemini_api_key
 QDRANT_URL=your_qdrant_instance_url
 QDRANT_API_KEY=your_qdrant_api_key
-EMBEDDING_SERVER_URL=http://127.0.0.1:8001
 ```
 Start the backend development server:
 ```bash
 npm run dev
 ```
 
-### 3. Run Frontend Application
+### 2. Run Frontend Application
 Navigate to the `frontend/` directory, install dependencies, and start the Vite dev server:
 ```bash
 cd ../frontend

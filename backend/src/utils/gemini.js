@@ -23,6 +23,18 @@ const generateText =
     return result.response.text();
   };
 
+const generateEmbedding = async (text) => {
+  const embeddingModel = genAI.getGenerativeModel({
+    model: "text-embedding-004",
+  });
+  const result = await embeddingModel.embedContent({
+    content: { parts: [{ text }] },
+    outputDimensionality: 384,
+  });
+  return result.embedding.values;
+};
+
 module.exports = {
   generateText,
+  generateEmbedding,
 };
