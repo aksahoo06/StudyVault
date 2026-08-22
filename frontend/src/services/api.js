@@ -1,7 +1,14 @@
 import axios from "axios";
 
+let apiURL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+
+// Ensure the baseURL always ends with '/api' to match the backend mounting path
+if (apiURL && !apiURL.endsWith("/api") && !apiURL.endsWith("/api/")) {
+  apiURL = apiURL.endsWith("/") ? `${apiURL}api` : `${apiURL}/api`;
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000/api",
+  baseURL: apiURL,
 });
 
 api.interceptors.request.use((config) => {

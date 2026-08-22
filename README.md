@@ -1,5 +1,6 @@
 # StudyVault — AI-Powered Learning Platform
-
+backend url- https://studyvault-wkyu.onrender.com
+frontend url- https://study-vault-gray.vercel.app/
 StudyVault is a full-stack, AI-powered learning platform that allows students to upload PDF study materials and transform them into interactive learning resources. Built on a robust MERN (MongoDB, Express, React, Node) architecture, it implements a custom **Retrieval-Augmented Generation (RAG)** pipeline, native embedding generation, and persistent vector search to deliver contextual learning tools.
 
 ---
