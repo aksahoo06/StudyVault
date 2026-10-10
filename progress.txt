@@ -1,0 +1,43 @@
+# StudyVault Live Classroom Feature - Progress Log
+
+## Status: All Steps Completed - Feature Fully Implemented
+
+### Completed Steps:
+- Analyzed existing StudyVault codebase (Express, MongoDB, Mongoose, JWT auth, Vite React frontend).
+- Created `v2.txt` defining feature targets and 4 major implementation steps.
+- Created `progress.txt` for tracking execution state.
+- **Step 1 Completed**:
+  - Installed `socket.io` in backend and `socket.io-client` in frontend.
+  - Created `backend/src/models/classroom.js` Mongoose schema.
+  - Created `backend/src/sockets/liveClassSocket.js` with HTTP server wrapper, Socket.IO setup, and JWT auth middleware.
+  - Created `backend/src/controllers/classroomController.js` and `backend/src/routes/classroom.js`.
+  - Mounted routes in `backend/src/app.js` at `/api/classrooms`.
+  - Updated `backend/src/server.js` to create HTTP server and attach Socket.IO.
+- **Step 2 Completed**:
+  - Created `backend/src/sockets/classroomLifecycle.js` managing in-memory timers for 15-minute auto-expiration and 2-minute teacher disconnect grace period.
+  - Implemented automatic temporary data cleanup (`whiteboardState = []`, `chatMessages = []`) upon class ending.
+  - Implemented teacher disconnect detection and 2-minute reconnect window with Socket.IO room notifications (`teacher-disconnected`, `teacher-reconnected`, `class-ended`).
+  - Added manual class ending controller `POST /api/classrooms/:id/end` and socket event `end-class` with teacher authorization checks.
+  - Added server boot restoration `restoreActiveTimers()` in `backend/src/server.js` to ensure existing active classes auto-expire smoothly across server restarts.
+- **Step 3 Completed**:
+  - Extended `backend/src/sockets/liveClassSocket.js` with real-time room socket event handlers (`init-classroom-state`, `draw-line`, `clear-canvas`, `send-message`).
+  - Added server-side teacher role authorization checks for whiteboard drawing and clear actions (`classroom.creatorUserId === socket.user._id`).
+  - Implemented mid-session joiner state synchronization delivering existing `whiteboardState` and `chatMessages` snapshots on `join-room`.
+  - Created `frontend/src/services/socket.js` for centralized Socket.IO client instance & JWT handshake management.
+  - Created `frontend/src/components/Whiteboard.jsx` featuring responsive HTML Canvas, normalized coordinate scaling (1000x600 grid), pen/eraser tools, color palette, line width controls, clear button, and view-only mode for students.
+  - Created `frontend/src/components/LiveChat.jsx` featuring real-time messaging, teacher badges, timestamp formatting, and auto-scrolling message list.
+- **Step 4 Completed (Final Furnishing)**:
+  - Added WebRTC audio signaling socket handlers (`webrtc-offer`, `webrtc-answer`, `webrtc-ice-candidate`, `teacher-mic-state`) with teacher role validation in `backend/src/sockets/liveClassSocket.js`.
+  - Created `frontend/src/components/LiveAudio.jsx` for WebRTC teacher microphone capture, peer connection setup, Google STUN server relay, mute controls, and student auto-play stream player.
+  - Created `frontend/src/pages/LiveClassesDashboard.jsx` at `/live-classes` listing active live classes, last 3 ended classes history, and modal to create new live classrooms.
+  - Created `frontend/src/pages/ClassroomPage.jsx` at `/live/:classroomId` integrating Whiteboard, Live Audio stream bar, Live Chat, 15-minute countdown timer, teacher disconnect 2-minute warning banner, and class ended cleanup overlay.
+  - Updated `frontend/src/components/Sidebar.jsx` with "Live Classroom" navigation link.
+  - Updated `frontend/src/App.jsx` with protected routes `/live-classes` and `/live/:classroomId`.
+  - Updated `socket.txt` with a complete chronological implementation record and socket event summary table.
+  - Updated `flow.txt` with final system architecture and end-to-end user workflows.
+
+### Current Status:
+- Live Classroom feature development and furnishing complete! Ready for production testing.
+
+### Pending Steps:
+- None (All 4 implementation steps completed).

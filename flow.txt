@@ -1,0 +1,305 @@
+================================================================================
+                     STUDYVAULT - CONCEPTUAL SYSTEM FLOW
+================================================================================
+
+This document maps out the conceptual flow of StudyVault in a visual,
+flowchart format. It illustrates how study materials (PDFs) are uploaded,
+processed, stored, indexed into semantic vector memory, and retrieved to
+power AI study tools and contextual RAG chat.
+
+================================================================================
+                         1. HIGH-LEVEL ARCHITECTURE
+================================================================================
+
+                             +------------------+
+                             |   STUDENT / UI   |
+                             | (React Frontend) |
+                             +--------+---------+
+                                      |
+                     +----------------+----------------+
+                     |                                 |
+                     v                                 v
+           [ DOCUMENT UPLOAD ]               [ STUDY & INTERACTION ]
+                     |                                 |
+                     v                                 |
+           +-------------------+                       |
+           | Ingestion Engine  |                       |
+           +---------+---------+                       |
+                     |                                 |
+        +------------+------------+                    |
+        |                         |                    |
+        v                         v                    v
+  [ Cloud Storage ]        [ Vector Index ]     +--------------+
+  (Cloudinary / Local)     (Qdrant DB)          | AI Features  |
+        |                         |             +-------+------+
+        v                         v                     |
+  [ Metadata Store ]       (Semantic Search)            +---> [ RAG Chat ]
+     (MongoDB)                                          +---> [ Flashcards ]
+                                                        +---> [ Quizzes ]
+
+
+================================================================================
+                    2. FILE UPLOAD & INGESTION FLOW (RAG)
+================================================================================
+
+This flow explains what happens when a student uploads a PDF study document:
+
+   [ Student selects & uploads PDF ]
+                  |
+                  v
+   [ 1. In-Memory Upload Handler ] (Multer)
+      - Intercepts incoming file stream directly in RAM buffer.
+      - Avoids temporary disk clutter on the server.
+                  |
+                  +-----------------------------------+
+                  |                                   |
+                  v                                   v
+   [ 2. Cloud Storage Pipeline ]          [ 3. Text Extraction & Page Tagging ]
+      - Pipes memory buffer directly         - Reads PDF buffer page by page.
+        to Cloudinary cloud storage.         - Injects page boundaries:
+      - Keeps a safe fallback copy             "[[PAGE:1]]", "[[PAGE:2]]", etc.
+        for reliable offline access.         - Preserves exact source location
+                  |                            for future citations.
+                  v                                   |
+         (Secure Cloud URL)                           |
+                  |                                   |
+                  +-----------------+-----------------+
+                                    |
+                                    v
+                       [ 4. Database Metadata Record ] (MongoDB)
+                          - Saves: Title, PDF URL, Cloudinary ID,
+                            Full Extracted Text, and User ID.
+                                    |
+                                    v
+                       [ 5. Page-by-Page Segmentation ]
+                          - Splits extracted text using page markers
+                            so chunks never lose their page origin.
+                                    |
+                                    v
+                       [ 6. Smart Text Chunking ]
+                          - Breaks each page into manageable chunks
+                            (e.g., ~500 words each).
+                          - Applies a 50-word overlap between chunks
+                            so sentences/ideas are never abruptly cut off.
+                                    |
+                                    v
+                       [ 7. Vector Embedding Generation ] (Gemini API)
+                          - Transforms each text chunk into mathematical
+                            coordinates (384-dimensional vector).
+                          - Captures semantic meaning (ideas & concepts).
+                                    |
+                                    v
+                       [ 8. Vector Database Indexing ] (Qdrant)
+                          - Stores chunk vectors + rich metadata:
+                            * Note ID & User ID (for multi-tenant isolation)
+                            * Page number (for pinpoint citations)
+                            * Raw chunk text (for LLM context injection)
+                                    |
+                                    v
+                  [ Ready for Contextual AI Querying! ]
+
+
+================================================================================
+                    3. RAG CHAT & QUESTION ANSWERING FLOW
+================================================================================
+
+This flow shows how the AI answers student questions strictly based on their
+uploaded notes, preventing hallucinations and citing exact pages:
+
+   [ Student types question in Chat: "What is ACID in DBMS?" ]
+                                |
+                                v
+   [ 1. Input Safety & Guardrails ]
+      - Validates note ownership & user authorization.
+      - Scans for prompt-injection / jailbreak keywords to protect the AI.
+                                |
+                                v
+   [ 2. Question Vectorization ]
+      - Converts the user's question into a vector embedding
+        using the same embedding model.
+                                |
+                                v
+   [ 3. Semantic Vector Search ] (Qdrant)
+      - Compares the question vector against all chunk vectors of this note.
+      - Filters strictly by: userId AND noteId (guarantees data privacy).
+      - Finds the Top-K (top 5) most semantically similar chunks.
+                                |
+                                v
+   [ 4. Context Isolation & Assembly ]
+      - Wraps retrieved chunks inside strict XML boundary tags:
+        <document_context> ... </document_context>
+      - Pulls the last 10 messages from MongoDB for conversation memory.
+                                |
+                                v
+   [ 5. Grounded AI Reasoning ] (Google Gemini LLM)
+      - System Prompt instructs Gemini:
+        "Answer ONLY using the provided document context.
+         Never invent facts. If not found, say so."
+                                |
+                                v
+   [ 6. Verified Answer + Page Citation ]
+      - Returns contextual answer to the student.
+      - Displays exact references (e.g., "DBMS_Notes.pdf — Page 12").
+      - Saves both question and answer to MongoDB conversation history.
+
+
+================================================================================
+                 4. AI STUDY TOOLS GENERATION (FLASHCARDS & QUIZ)
+================================================================================
+
+This flow illustrates how study tools are generated on-demand from notes:
+
+   [ Student clicks "Generate Flashcards" or "Generate Quiz" ]
+                                |
+                                v
+   [ 1. Cache Verification ]
+      - Checks MongoDB if flashcards/quizzes were already created.
+      - If found, loads them instantly without re-calling the AI.
+                                |
+                                v
+   [ 2. Document Content Retrieval ]
+      - Loads the clean extracted text of the note from MongoDB.
+      - Selects key text segments within token limits.
+                                |
+                                v
+   [ 3. Structured Instruction Prompt ]
+      - Sends tailored prompt to Gemini:
+        * For Flashcards: "Generate 10 question-answer concept cards."
+        * For Quiz: "Generate 5 multiple-choice questions with 4 options."
+      - Demands response strictly in structured JSON format.
+                                |
+                                v
+   [ 4. AI Processing & Parsing ] (Gemini LLM)
+      - Gemini analyzes content and generates structured study items.
+      - Backend cleans markdown tags (```json) and parses output into objects.
+                                |
+                                v
+   [ 5. Persistence & Interactive Presentation ]
+      - Saves FlashcardSet or Test record in MongoDB linked to user.
+      - Frontend renders:
+        * Flippable 3D flashcards for active recall.
+        * Interactive quiz with live score calculations and answer reviews.
+
+
+================================================================================
+                           5. SUMMARY OF DATA STORES
+================================================================================
+
++------------------+-----------------------------+-----------------------------+
+| Component        | Role                        | Stored Information          |
++------------------+-----------------------------+-----------------------------+
+| Cloudinary       | Remote Document Hosting     | Original PDF binary files   |
+| MongoDB Atlas    | Application State & History | Users, Note records, Text,  |
+|                  |                             | Flashcards, Quizzes, Chats, |
+|                  |                             | Classrooms (Whiteboard/Chat)|
+| Qdrant DB        | Semantic Vector Engine      | Vector embeddings, Chunks,  |
+|                  |                             | Page numbers, Note/User IDs |
+| In-Memory Buffer | Ephemeral Request Transit   | File bytes during upload    |
+| In-Memory Timers | Classroom Lifecycle         | 15-min max & 2-min grace    |
++------------------+-----------------------------+-----------------------------+
+
+
+================================================================================
+               6. LIVE CLASSROOM FEATURE SYSTEM FLOW (FULLY IMPLEMENTED)
+================================================================================
+
+1. Classroom Creation & Authentication Flow:
+   [ Teacher creates Live Class ] ---> [ POST /api/classrooms ]
+                                           |
+                                           v
+                        [ MongoDB: Create Active Classroom ]
+                        [ Start 15-Minute Auto-Expiration Timer ]
+                                           |
+                                           v
+                [ User joins Socket.IO Room: `join-room` ({ classroomId }) ]
+                [ Socket JWT Auth Middleware verifies Bearer Token ]
+                                           |
+                                           v
+               [ Server emits `init-classroom-state` to joining socket ]
+               (Contains: whiteboardState snapshot, chatMessages, isTeacher flag)
+
+2. Classroom Lifecycle & Grace Period Flow:
+   [ Teacher Disconnects / Drops Connection ]
+                       |
+                       v
+   [ Socket `disconnect` fires ---> `handleTeacherDisconnect()` ]
+   - Sets `teacherDisconnectedAt = Date.now()` in MongoDB.
+   - Starts 2-Minute Grace Timer.
+   - Emits `teacher-disconnected` (120s countdown alert) to Room.
+                       |
+        +--------------+--------------+
+        |                             |
+        v                             v
+   [ Reconnects < 2 min ]       [ Grace Timer Expires (2 min) ]
+   - Clears Grace Timer.        - Purges temporary data:
+   - Resets disconnectedAt.       `whiteboardState = []`, `chatMessages = []`
+   - Emits `teacher-reconnected`. - Sets `status = 'ended'`, `endedAt = now`.
+                                - Emits `class-ended` to Room.
+
+3. Real-Time Whiteboard Sync Flow:
+   [ Teacher draws on Whiteboard canvas ]
+                       |
+                       v
+   [ Canvas normalizes point coordinates to 1000x600 internal resolution ]
+   [ Emits `draw-line` socket event with stroke payload ]
+                       |
+                       v
+   [ Socket Server Authorization Check: `socket.user._id === creatorUserId` ]
+        - If Student tries to draw: Rejected silently by Server.
+        - If Teacher:
+            * Pushes stroke to MongoDB `whiteboardState` array.
+            * Broadcasts `draw-line` to all room participants via Socket.IO.
+                       |
+                       v
+   [ Student Canvas receives `draw-line` stroke & renders in real-time ]
+
+4. Real-Time Live Chat Flow:
+   [ User types message & submits ] ---> [ Emits `send-message` event ]
+                                                  |
+                                                  v
+                     [ Server validates non-empty text & active class status ]
+                     [ Appends message with senderName, senderId, timestamp ]
+                     [ Pushes to MongoDB `chatMessages` array ]
+                     [ Broadcasts `new-message` to Room ]
+                                                  |
+                                                  v
+                     [ Frontend Chat UI appends message, highlights Teacher ]
+                     [ Auto-scrolls message list to bottom ]
+
+5. WebRTC One-Way Audio Streaming Flow (Teacher to Students):
+   [ Teacher clicks "Start Mic" ] ---> [ `navigator.mediaDevices.getUserMedia({ audio: true })` ]
+                                                       |
+                                                       v
+                                   [ Teacher creates WebRTC Peer Connection ]
+                                   [ Emits `webrtc-offer` via Socket.IO ]
+                                                       |
+                                                       v
+                         [ Server verifies Teacher role & relays offer to room ]
+                         [ Student Peer Connection receives offer, sends `webrtc-answer` ]
+                         [ Exchanges ICE Candidates via `webrtc-ice-candidate` ]
+                                                       |
+                                                       v
+                         [ Student receives remote audio stream & plays live ]
+
+6. Complete Frontend UI Flow:
+   [ Student / Teacher navigates to `/live-classes` Dashboard ]
+           |
+           v
+   [ GET /api/classrooms/active ] + [ GET /api/classrooms/recent ]
+   (Lists live interactive cards & last 3 ended classes history)
+           |
+           v
+   [ User clicks "Join Class" or opens direct link `/live/:classroomId` ]
+           |
+           v
+   [ Renders `/live/:classroomId` Workspace Layout ]:
+      +-----------------------------------------------------------+
+      | Header: Class Name, Timer Badge, Status, End Class Button |
+      +-----------------------------+-----------------------------+
+      | Interactive Whiteboard      | Live Chat Widget            |
+      | (1000x600 Canvas Component) | (Real-Time Messages)        |
+      |                             +-----------------------------+
+      |                             | WebRTC Audio Player         |
+      |                             | (Live Mic Status & Stream)  |
+      +-----------------------------+-----------------------------+
+

@@ -1,11 +1,20 @@
 require("dotenv").config({ override: true });
-const app= require("./app");
+const http = require("http");
+const app = require("./app");
+const connectDB = require("./config/db.js");
+const { initLiveClassSocket } = require("./sockets/liveClassSocket");
+const { restoreActiveTimers } = require("./sockets/classroomLifecycle");
+
 console.log(process.env.MONGO_URI);
-const connectDB=require("./config/db.js");
-connectDB();
+connectDB().then(() => {
+  restoreActiveTimers();
+});
 
-const PORT= process.env.PORT || 5000;
+const server = http.createServer(app);
+initLiveClassSocket(server);
 
-app.listen(PORT,()=>{
-    console.log(`App is listening on port:${PORT}`);
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () => {
+  console.log(`Server & Socket.IO listening on port:${PORT}`);
 });

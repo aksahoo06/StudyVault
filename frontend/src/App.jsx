@@ -6,6 +6,8 @@ import RegisterPage from "./pages/RegisterPage";
 import DashboardPage from "./pages/DashboardPage";
 import LibraryPage from "./pages/LibraryPage";
 import ProfilePage from "./pages/ProfilePage";
+import LiveClassesDashboard from "./pages/LiveClassesDashboard";
+import ClassroomPage from "./pages/ClassroomPage";
 import WorkspaceLayout from "./pages/Workspace/WorkspaceLayout";
 import Summary from "./pages/Workspace/Summary";
 import Chat from "./pages/Workspace/Chat/Chat";
@@ -37,6 +39,22 @@ function App() {
         element={
           <ProtectedRoute>
             <LibraryPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/live-classes"
+        element={
+          <ProtectedRoute>
+            <LiveClassesDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/live/:classroomId"
+        element={
+          <ProtectedRoute>
+            <ClassroomPage />
           </ProtectedRoute>
         }
       />

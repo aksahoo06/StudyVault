@@ -1,0 +1,45 @@
+# StudyVault Live Classroom Feature - Targets & Implementation Plan
+
+## Targets:
+1. Live Classes dashboard at `/live-classes` showing currently live classes and the last 3 completed classes.
+2. Classroom view at `/live/:classroomId` accessible via Join button or direct URL.
+3. Authenticated classroom creation with auto-generated ID, 15-minute max duration, and creator set as sole teacher.
+4. Server-enforced permissions (teacher can draw, erase, clear, speak, end class; students can only view, listen, chat).
+5. Real-time whiteboard synchronization using HTML Canvas and Socket.IO rooms.
+6. One-way teacher audio streaming using WebRTC with Socket.IO signaling and Google STUN server.
+7. Real-time text chat in classroom.
+8. Temporary storage of whiteboard/chat during live class; auto-deletion upon class end (leaving only class name, creator, start time, endedAt in history).
+9. Server-managed class expiration:
+   - 15-minute max duration auto-end.
+   - 2-minute teacher disconnect grace period before auto-ending class.
+   - Manual class end by teacher.
+   - Robust TTL check so server restart or delayed check auto-expires past classes.
+
+---
+
+## 4 Major Implementation Steps:
+
+### Step 1: Data Model, REST APIs, & Server Setup with Socket.IO + JWT Auth
+- Create `backend/src/models/classroom.js` Mongoose schema with permanent history fields (`className`, `creatorUserId`, `startTime`, `endedAt`, `status`) and temporary state fields (`whiteboardState`, `chatMessages`, `teacherDisconnectedAt`).
+- Install `socket.io` (backend) and `socket.io-client` (frontend).
+- Update `backend/src/server.js` to construct an HTTP server and attach Socket.IO with CORS.
+- Implement JWT socket authentication middleware in `backend/src/sockets/liveClassSocket.js`.
+- Create `backend/src/controllers/classroomController.js` and `backend/src/routes/classroom.js` for class creation, active list, recent 3 ended list, and single class details.
+
+### Step 2: Server-Side Classroom Lifecycle & Timers (15-min Max & 2-min Grace Period)
+- Implement background timer management for 15-minute auto-expiration.
+- Implement teacher disconnect handler with 2-minute grace timer. If teacher reconnects within 2 minutes, clear grace timer; otherwise, purge temporary data and mark ended.
+- Implement manual class ending with server-side authorization check and immediate temporary data deletion.
+- Add passive TTL status checks to GET routes to ensure expired classes are updated even on server restarts.
+
+### Step 3: Real-Time Whiteboard & Live Chat Sync
+- HTML Canvas whiteboard component with pen color, line width, eraser, clear tools for teacher.
+- Socket event listeners for `draw-line`, `clear-canvas` with server-side teacher validation.
+- Sync existing whiteboard state snapshot to students joining mid-session.
+- Real-time text chat component emitting `send-message` and receiving `new-message` via Socket.IO room.
+
+### Step 4: One-Way Teacher WebRTC Audio & Frontend Pages/UI Integration
+- WebRTC Peer Connection manager for teacher-to-student audio using `getUserMedia` and free Google STUN (`stun:stun.l.google.com:19302`).
+- WebRTC signaling (`webrtc-offer`, `webrtc-answer`, `webrtc-ice-candidate`) via Socket.IO, blocking student audio publication on the server.
+- Build Live Classes Dashboard page (`/live-classes`) and Classroom page (`/live/:classroomId`).
+- Integrate sidebar link and routes in `App.jsx`.

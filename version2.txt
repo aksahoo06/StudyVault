@@ -1,0 +1,265 @@
+﻿# StudyVault – Hybrid RAG Upgrade (Dense + BM25 + RRF)
+# version2.txt — Safe & Bulletproof Implementation Plan (NO CODE TOUCHED YET)
+# ============================================================================
+# Core Goal: Implement BM25 Keyword Search + Reciprocal Rank Fusion (RRF)
+#            alongside existing Qdrant Dense Vector Retrieval, with ZERO risk
+#            of breaking existing functionality, schemas, or API contracts.
+# ============================================================================
+
+
+## 1. CODEBASE INSPECTION & ARCHITECTURE AUDIT
+----------------------------------------------------------------------------
+Files inspected prior to updating this plan:
+
+  backend/services/ai/
+    embedding_service.js      - Re-exports generateEmbedding from gemini.js
+    chunkingServices.js       - Word-based chunking (500 words / 50-word overlap)
+    ingestion_service.js      - ingestAndStoreText: parses [[PAGE:N]] markers -> chunks -> embeds -> stores in Qdrant
+    qdrant_service.js         - storeChunks (upserts to Qdrant), createCollection (384-dim Cosine), getStoredChunks
+    retreival_services.js     - retrieveChunks: dense query vector search with userId/noteId filters
+    chat_services.js          - chatWithPdf: RAG pipeline handler (retrieveChunks -> buildRagPrompt -> Gemini LLM)
+    prompt_service.js         - buildRagPrompt: XML-isolated prompt template with page citations & injection protection
+    conversation_services.js  - MongoDB conversation history CRUD operations
+
+  backend/src/
+    utils/gemini.js           - Gemini LLM & embedding API callers
+    utils/pdfExtractor.js     - pdf-parse with pagerender callback injecting [[PAGE:N]] markers
+    config/qdrant.js          - Qdrant Client setup
+    models/note.js            - Note Mongoose Schema (stores title, pdfUrl, extractedText, uploadedBy)
+    models/conversations.js   - Conversation Mongoose Schema
+    controllers/noteController.js  - uploadNote (ingests PDF) & deleteNote (removes DB/storage records)
+    controllers/chatController.js  - Express controller handling chat endpoints, validation & ownership checks
+    routes/chatRoutes.js      - Express chat routes
+    routes/note.js            - Express note routes
+    server.js                 - Node.js entry point & DB connector
+
+  Key Inspection Insights:
+    1. Zero Breaking Changes:
+       - Qdrant points keep random UUIDs (`crypto.randomUUID()`) to avoid database schema migrations.
+       - Fusion key `${noteId}-${chunkIndex}` is generated dynamically during RRF scoring.
+       - Frontend API contracts, request/response formats, and conversation state management remain untouched.
+    2. Page-Aware Chunking:
+       - `ingestion_service.js` parses `[[PAGE:N]]` page markers before chunking.
+       - Any BM25 rebuild logic MUST reuse this exact page-parsing chunk logic to keep chunk text & page numbers identical to Qdrant.
+    3. Failure Isolation:
+       - BM25 and RRF operate as an enhancement layer. If BM25 fails or is empty, the pipeline gracefully falls back to existing dense vector retrieval.
+
+
+----------------------------------------------------------------------------
+## 2. NON-BREAKING GUARANTEES & SCOPE BOUNDARIES
+----------------------------------------------------------------------------
+  WHAT WILL BE ADDED:
+    [+] BM25 Keyword Search Engine (in-memory, per-user scoped).
+    [+] Reciprocal Rank Fusion (RRF) to merge and deduplicate Dense + BM25 results.
+    [+] BM25 indexing during PDF upload (`ingestion_service.js`).
+    [+] BM25 index warm-up on server startup (`server.js`).
+    [+] Cleanup of deleted note chunks from Qdrant and BM25 index on note deletion (`noteController.js`).
+
+  WHAT WILL NOT BE CHANGED:
+    [=] No modifications to `prompt_service.js` template structure.
+    [=] No changes to `chatController.js` validation, HTTP status codes, or response payload format.
+    [=] No changes to Qdrant point schema or vector distance configuration.
+    [=] No changes to MongoDB schemas (`note.js`, `conversations.js`).
+    [=] No changes to existing frontend React pages or components.
+
+
+----------------------------------------------------------------------------
+## 3. CHRONOLOGICAL STEP-BY-STEP IMPLEMENTATION PLAN
+----------------------------------------------------------------------------
+
+### STEP 1: Install Pure-JS BM25 Dependencies
+  Target Directory: `backend/`
+  Packages to Install:
+    - `wink-bm25-text-search`: Pure JavaScript BM25 engine.
+    - `wink-nlp`: Tokenization pipeline required by wink-bm25.
+    - `wink-eng-lite-web-model`: English language model for wink-nlp.
+
+  Command:
+    cd backend && npm install wink-bm25-text-search wink-nlp wink-eng-lite-web-model
+
+  Safety Note: Pure JS packages ensure compatibility across environments without native C++ compilation dependencies.
+
+
+### STEP 2: Add `deleteNoteChunks` to Qdrant Service
+  File: `backend/services/ai/qdrant_service.js`
+
+  Action: Export a new function `deleteNoteChunks(noteId)`:
+    async function deleteNoteChunks(noteId) {
+        await qdrantClient.delete(COLLECTION_NAME, {
+            filter: {
+                must: [{ key: "noteId", match: { value: noteId } }]
+            }
+        });
+    }
+
+  Safety Note: Wraps Qdrant payload filter deletion to clean vector chunks when a note is deleted.
+
+
+### STEP 3: Create `bm25_service.js` (In-Memory Scoped BM25 Index Manager)
+  File: `backend/services/ai/bm25_service.js` (NEW FILE)
+
+  Exported Functions:
+    1. `indexChunks(chunks, { noteId, userId })`
+       - Creates or retrieves the user's BM25 index (stored in a `Map<userId, engine>`).
+       - Adds each chunk with metadata: `{ fusionKey: `${noteId}-${chunkIndex}`, noteId, userId, chunkIndex, pageNumber, text }`.
+       - Calls `engine.consolidate()`.
+
+    2. `removeNoteFromIndex(userId, noteId)`
+       - Rebuilds the user's BM25 index excluding documents matching `noteId`.
+       - Deletes user entry from `Map` if zero documents remain.
+
+    3. `bm25Search(query, { userId, noteId, limit = 10 })`
+       - Returns `[]` immediately if no index exists for `userId` (graceful fallback).
+       - Runs BM25 search over the user's documents.
+       - Filters results by `noteId` if specified (ensuring document-specific RAG support).
+       - Returns formatted candidates:
+         `[{ fusionKey, score, payload: { text, noteId, userId, chunkIndex, pageNumber } }]`.
+
+    4. `rebuildAllIndexes(notes)`
+       - Called during server boot.
+       - Accepts array of notes from MongoDB: `[{ _id, uploadedBy, extractedText }]`.
+       - Uses helper to parse `[[PAGE:N]]` markers and chunk text identically to `ingestion_service.js`.
+       - Populates in-memory BM25 index for all users.
+
+  Safety Note: User isolation is strictly enforced because each `userId` key maps to an isolated BM25 instance.
+
+
+### STEP 4: Create `rrf_service.js` (Reciprocal Rank Fusion)
+  File: `backend/services/ai/rrf_service.js` (NEW FILE)
+
+  Exported Function:
+    `reciprocalRankFusion(denseResults, bm25Results, { k = 60, topN = 5 })`
+
+  Algorithm:
+    1. Initialize `Map<fusionKey, { rrfScore, payload }>` accumulator.
+    2. Dense Results Iteration:
+       - `fusionKey = `${item.payload.noteId}-${item.payload.chunkIndex}``
+       - `rrfScore += 1 / (k + rank)`
+    3. BM25 Results Iteration:
+       - `fusionKey = item.fusionKey`
+       - `rrfScore += 1 / (k + rank)`  (Deduplicates automatically if chunk is present in both search lists).
+    4. Sort accumulator entries by `rrfScore` descending.
+    5. Slice top `topN` entries and return:
+       `[{ fusionKey, rrfScore, payload: { text, noteId, userId, chunkIndex, pageNumber } }]`.
+
+  Safety Note: Payload format matches Qdrant structure expected by `buildRagPrompt`.
+
+
+### STEP 5: Add Non-Blocking BM25 Warm-Up on Server Boot
+  File: `backend/src/server.js`
+
+  Action:
+    In the DB connection completion block:
+    ```javascript
+    const Note = require('./models/note');
+    const { rebuildAllIndexes } = require('../services/ai/bm25_service');
+
+    try {
+        const allNotes = await Note.find({}, '_id uploadedBy extractedText');
+        await rebuildAllIndexes(allNotes);
+        console.log(`[BM25] Warm-up complete for ${allNotes.length} notes.`);
+    } catch (err) {
+        console.warn('[BM25] Warm-up warning:', err.message);
+    }
+    ```
+
+  Safety Note: Wrapped in `try/catch` so warm-up errors never crash server startup.
+
+
+### STEP 6: Integrate BM25 Indexing in PDF Upload Pipeline
+  File: `backend/services/ai/ingestion_service.js`
+
+  Action:
+    In `ingestAndStoreText`, immediately after `storeChunks(...)`:
+    ```javascript
+    const { indexChunks } = require('./bm25_service');
+    await indexChunks(chunks, { noteId: noteId.toString(), userId: userId.toString() });
+    ```
+
+  Safety Note: Newly uploaded PDFs become instantly available in both Qdrant vector search and BM25 search.
+
+
+### STEP 7: Add Qdrant & BM25 Cleanup to Note Deletion
+  File: `backend/src/controllers/noteController.js`
+
+  Action:
+    In `deleteNote`, right after `await note.deleteOne()`:
+    ```javascript
+    // Clean up Qdrant vector chunks
+    try {
+        const { deleteNoteChunks } = require('../../services/ai/qdrant_service');
+        await deleteNoteChunks(note._id.toString());
+    } catch (qdrantErr) {
+        console.warn('[Qdrant] Chunk deletion cleanup skipped:', qdrantErr.message);
+    }
+
+    // Clean up BM25 index chunks
+    try {
+        const { removeNoteFromIndex } = require('../../services/ai/bm25_service');
+        await removeNoteFromIndex(req.user._id.toString(), note._id.toString());
+    } catch (bm25Err) {
+        console.warn('[BM25] Index removal cleanup skipped:', bm25Err.message);
+    }
+    ```
+
+  Safety Note: Isolated in individual try/catches; deletion failures in vector/bm25 storage will log warnings without blocking HTTP response.
+
+
+### STEP 8: Upgrade `chatWithPdf` to Hybrid Retrieval
+  File: `backend/services/ai/chat_services.js`
+
+  Action:
+    Replace single `retrieveChunks` call with hybrid dense + BM25 + RRF execution:
+    ```javascript
+    const DENSE_LIMIT = 10;
+    const BM25_LIMIT  = 10;
+    const FINAL_LIMIT = 5;
+
+    // 1. Dense retrieval
+    const denseChunks = await retrieveChunks(message, { userId, noteId, limit: DENSE_LIMIT });
+
+    // 2. BM25 keyword retrieval with safe fallback
+    let bm25Chunks = [];
+    try {
+        const { bm25Search } = require('./bm25_service');
+        bm25Chunks = await bm25Search(message, {
+            userId: userId.toString(),
+            noteId: noteId ? noteId.toString() : null,
+            limit: BM25_LIMIT
+        });
+    } catch (bm25Err) {
+        console.warn('[BM25] Search skipped, falling back to dense:', bm25Err.message);
+    }
+
+    // 3. RRF Fusion
+    const { reciprocalRankFusion } = require('./rrf_service');
+    const chunks = reciprocalRankFusion(denseChunks, bm25Chunks, { topN: FINAL_LIMIT });
+    ```
+
+    In return value sources mapping:
+    `score: chunk.rrfScore ?? chunk.score`
+
+  Safety Note: Ensures backward compatibility. If BM25 encounters an issue, `denseChunks` seamlessly feeds the LLM prompt.
+
+
+-----------------------------------------------
+## 4. SUMMARY OF FILE TOUCHES
+-----------------------------------------------
+
+  FILES TO MODIFY (5 files):
+    1. `backend/services/ai/qdrant_service.js`     (+ `deleteNoteChunks`)
+    2. `backend/src/server.js`                     (+ startup BM25 index warm-up)
+    3. `backend/services/ai/ingestion_service.js` (+ `indexChunks` during upload)
+    4. `backend/src/controllers/noteController.js` (+ vector & BM25 cleanup on delete)
+    5. `backend/services/ai/chat_services.js`      (hybrid dense + BM25 + RRF pipeline)
+
+  NEW FILES TO CREATE (2 files):
+    1. `backend/services/ai/bm25_service.js`       (In-memory BM25 index management)
+    2. `backend/services/ai/rrf_service.js`        (Reciprocal Rank Fusion algorithm)
+
+  UNTOUCHED CODE & INFRASTRUCTURE:
+    - Frontend (`/src/...`)
+    - DB models & schemas
+    - Qdrant configuration
+    - Prompt template logic (`prompt_service.js`)
+    - Chat controller & REST response format

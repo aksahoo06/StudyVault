@@ -1,0 +1,144 @@
+================================================================================
+      STUDYVAULT LIVE CLASSROOM - CHRONOLOGICAL IMPLEMENTATION & SOCKET GUIDE
+================================================================================
+
+This document provides a complete, step-by-step chronological record of the Live
+Classroom feature implementation across backend and frontend systems, complete with
+approximate line number ranges for quick code inspection.
+
+--------------------------------------------------------------------------------
+STEP 1: DATA MODEL, REST APIS & SOCKET.IO SERVER SETUP.
+--------------------------------------------------------------------------------
+
+1. `backend/src/models/classroom.js` [CREATED] (~65 lines total)
+   - Lines 3–21: `chatMessageSchema` (senderId, senderName, text, timestamp).
+   - Lines 23–62: `classroomSchema` (className, creatorUserId, startTime, endedAt, status, whiteboardState, chatMessages, teacherDisconnectedAt).
+
+2. `backend/src/sockets/liveClassSocket.js` [CREATED & EXPANDED] (~290 lines total)
+   - Lines 12–20: `initLiveClassSocket()` setup with HTTP server wrapper & CORS origin configuration.
+   - Lines 21–48: Socket JWT Authentication Middleware (`socket.user` population). done
+
+3. `backend/src/controllers/classroomController.js` [CREATED] (~164 lines total)
+   - Lines 10–19: `checkAndExpireClassroom()` helper for passive 15-min TTL check.
+   - Lines 24–54: `createClassroom()` controller (POST /api/classrooms).
+   - Lines 59–79: `getActiveClassrooms()` controller (GET /api/classrooms/active).
+   - Lines 84–96: `getRecentEndedClassrooms()` controller (GET /api/classrooms/recent).
+   - Lines 99–125: `getClassroomById()` controller (GET /api/classrooms/:id).
+   - Lines 128–155: `endClassroomController()` controller (POST /api/classrooms/:id/end).
+
+4. `backend/src/routes/classroom.js` [CREATED] (~19 lines total)
+   - Lines 12–16: Express router mounting endpoints with `protect` middleware.
+
+5. `backend/src/server.js` [MODIFIED] (~20 lines total)
+   - Lines 13–14: Converted standard Express listener to HTTP server wrapper for Socket.IO (`http.createServer(app)`).
+   - Lines 9–11: Timer restoration call on boot (`restoreActiveTimers()`).
+
+6. `backend/src/app.js` [MODIFIED] (~32 lines total)
+   - Line 13: Imported `classroomRoutes`.
+   - Line 26: Mounted `/api/classrooms` endpoint in Express pipeline.
+
+
+--------------------------------------------------------------------------------
+STEP 2: SERVER-SIDE CLASSROOM LIFECYCLE & TIMERS
+--------------------------------------------------------------------------------
+
+1. `backend/src/sockets/classroomLifecycle.js` [CREATED] (~217 lines total)
+   - Lines 7–8: In-Memory Timer Registries (`maxDurationTimers` & `gracePeriodTimers`).
+   - Lines 23–45: `scheduleMaxDurationTimer()` (15-Minute Auto-Expiration Timer).
+   - Lines 61–100: `handleTeacherDisconnect()` (2-Minute Grace Timer & `teacher-disconnected` broadcast).
+   - Lines 105–135: `handleTeacherReconnect()` (Grace cancellation & `teacher-reconnected` broadcast).
+   - Lines 140–191: `endClassroom()` (Purges `whiteboardState = []`, `chatMessages = []`, sets `status = 'ended'`, emits `class-ended`).
+   - Lines 196–207: `restoreActiveTimers()` (Re-schedules max timers for active classes upon server restart).
+
+
+--------------------------------------------------------------------------------
+STEP 3: REAL-TIME WHITEBOARD & LIVE CHAT SYNC
+--------------------------------------------------------------------------------
+
+1. `frontend/src/services/socket.js` [CREATED] (~41 lines total)
+   - Lines 5–31: `initSocket()` client manager attaching JWT `Bearer <token>` in auth handshake.
+   - Lines 33–40: `getSocket()` and `disconnectSocket()` helpers.
+
+2. `backend/src/sockets/liveClassSocket.js` [MODIFIED] (~290 lines total)
+   - Lines 54–83: Socket event `join-room`: Joins room and emits `init-classroom-state` snapshot to joining client.
+   - Lines 96–120: Socket event `draw-line`: Validates teacher identity (`creatorUserId === socket.user._id`), pushes stroke to DB, broadcasts to room.
+   - Lines 123–147: Socket event `clear-canvas`: Validates teacher identity, resets DB `whiteboardState = []`, emits clear event to room.
+   - Lines 150–188: Socket event `send-message`: Validates text, pushes message object to DB `chatMessages`, broadcasts `new-message` to room.
+
+3. `frontend/src/components/Whiteboard.jsx` [CREATED] (~224 lines total)
+   - Lines 20–37: `getCanvasPoint()` (1000x600 coordinate grid normalization).
+   - Lines 40–65: `drawSegment()` & `clearCanvasLocally()` rendering helpers.
+   - Lines 70–95: `useEffect` socket listeners for `draw-line` & `clear-canvas`.
+   - Lines 98–140: Mouse/Touch event handlers for drawing and socket emission.
+   - Lines 165–220: Teacher Toolbar UI (Pen, Eraser, Color Palette, Line Width, Clear Button) & Student View-Only Badge.
+
+4. `frontend/src/components/LiveChat.jsx` [CREATED] (~134 lines total)
+   - Lines 27–37: Socket listener for `new-message` and auto-scrolling ref.
+   - Lines 39–50: `handleSendMessage()` submitting message via socket.
+   - Lines 60–115: Chat message bubble list rendering with "Teacher" badges and formatted timestamps.
+
+
+--------------------------------------------------------------------------------
+STEP 4: ONE-WAY WEBRTC AUDIO & FRONTEND PAGES / UI INTEGRATION
+--------------------------------------------------------------------------------
+
+1. `backend/src/sockets/liveClassSocket.js` [MODIFIED] (~290 lines total)
+   - Lines 191–209: Socket event `webrtc-offer`: Validates teacher role and relays WebRTC SDP offer to room.
+   - Lines 212–220: Socket event `webrtc-answer`: Relays student SDP answer to teacher.
+   - Lines 223–231: Socket event `webrtc-ice-candidate`: Relays ICE candidates between peers.
+   - Lines 234–248: Socket event `teacher-mic-state`: Relays teacher mic mute/unmute status.
+
+2. `frontend/src/components/LiveAudio.jsx` [CREATED] (~245 lines total)
+   - Lines 3–8: STUN Server Configuration (`stun:stun.l.google.com:19302`).
+   - Lines 50–95: Teacher `startTeacherBroadcast()` (`getUserMedia`, RTCPeerConnection creation, `webrtc-offer` emission).
+   - Lines 98–110: `toggleMicMute()` controls.
+   - Lines 113–170: Student WebRTC event handlers (`webrtc-offer` reception, `webrtc-answer` emission, HTML5 `<audio autoPlay />` stream assignment).
+   - Lines 175–240: UI control bar rendering for Teacher and Student audio status.
+
+3. `frontend/src/pages/LiveClassesDashboard.jsx` [CREATED] (~225 lines total)
+   - Lines 22–37: `fetchClassrooms()` (Fetches active classes `/api/classrooms/active` & recent ended classes `/api/classrooms/recent`).
+   - Lines 39–56: `handleCreateClassroom()` (Submits POST /api/classrooms & navigates to `/live/:id`).
+   - Lines 60–165: Active Live Classes Grid & Recent Completed Sessions list.
+   - Lines 170–220: "Create Live Classroom" Modal component.
+
+4. `frontend/src/pages/ClassroomPage.jsx` [CREATED] (~275 lines total)
+   - Lines 30–55: `fetchClassroomDetails()` metadata fetch & teacher check.
+   - Lines 58–75: 15-Minute Countdown Timer effect (`MM:SS`).
+   - Lines 78–90: 2-Minute Teacher Disconnect Grace Period Timer effect.
+   - Lines 93–140: Socket lifecycle handlers (`join-room`, `init-classroom-state`, `teacher-disconnected`, `teacher-reconnected`, `class-ended`).
+   - Lines 170–205: Header bar (Class Title, Status Pill, Timer Badge, End/Leave Class Buttons).
+   - Lines 208–225: Teacher Disconnect Warning Banner (120s Countdown).
+   - Lines 228–245: Classroom Ended Modal Overlay.
+   - Lines 248–270: 2-Column Main Workspace Grid (`Whiteboard.jsx` + `LiveAudio.jsx` on left, `LiveChat.jsx` on right).
+
+5. `frontend/src/components/Sidebar.jsx` [MODIFIED] (~173 lines total)
+   - Lines 48–66: Added "Live Classroom" item to `navItems` array pointing to `/live-classes`.
+
+6. `frontend/src/App.jsx` [MODIFIED] (~75 lines total)
+   - Lines 9–10: Imported `LiveClassesDashboard` & `ClassroomPage`.
+   - Lines 42–57: Mounted `/live-classes` and `/live/:classroomId` protected routes.
+
+
+--------------------------------------------------------------------------------
+SUMMARY OF SOCKET EVENTS & LOCATION MAP
+--------------------------------------------------------------------------------
+
++-----------------------+---------------------+-------------------+------------------+
+| Event Name            | Direction           | Backend File      | Approx Line Range|
++-----------------------+---------------------+-------------------+------------------+
+| `join-room`           | Client -> Server    | liveClassSocket.js| L54–L83          |
+| `leave-room`          | Client -> Server    | liveClassSocket.js| L86–L93          |
+| `init-classroom-state`| Server -> Client    | liveClassSocket.js| L71–L77          |
+| `draw-line`           | Client <-> Server   | liveClassSocket.js| L96–L120         |
+| `clear-canvas`        | Client <-> Server   | liveClassSocket.js| L123–L147        |
+| `send-message`        | Client -> Server    | liveClassSocket.js| L150–L188        |
+| `new-message`         | Server -> Client    | liveClassSocket.js| L177             |
+| `end-class`           | Client -> Server    | liveClassSocket.js| L251–L258        |
+| `teacher-disconnected`| Server -> Client    | classroomLifecy.. | L82–L86          |
+| `teacher-reconnected` | Server -> Client    | classroomLifecy.. | L124–L128        |
+| `class-ended`         | Server -> Client    | classroomLifecy.. | L178–L183        |
+| `webrtc-offer`        | Client <-> Server   | liveClassSocket.js| L191–L209        |
+| `webrtc-answer`       | Client <-> Server   | liveClassSocket.js| L212–L220        |
+| `webrtc-ice-candidate`| Client <-> Server   | liveClassSocket.js| L223–L231        |
+| `teacher-mic-state`   | Client <-> Server   | liveClassSocket.js| L234–L248        |
++-----------------------+---------------------+-------------------+------------------+

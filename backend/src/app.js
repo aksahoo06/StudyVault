@@ -10,6 +10,7 @@ const flashRoutes = require("./routes/flashcard.js");
 const aiRoutes =
   require("./routes/aiRoutes");
 const chatRoutes = require("./routes/chatRoutes");
+const classroomRoutes = require("./routes/classroom");
 
 const path = require("path");
 
@@ -22,6 +23,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/notes", noteRoutes);
 app.use("/api/flashcards", flashRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/classrooms", classroomRoutes);
 app.use(
   "/api/ai",
   aiRoutes
